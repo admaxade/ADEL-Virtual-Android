@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -36,48 +36,54 @@ jobs:
 
           ZIP_FILE=$(find . -type f \
             -iname 'ADEL_Virtual_Android*.zip' \
-            ! -path './.git/*' | head -n 1)
+            ! -path './.git/*' \
+            | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP not found"
-            find . -type f -name '*.zip'
+            echo "ERROR: Project ZIP not found."
+            find . -type f -iname '*.zip'
             exit 1
           fi
 
-          echo "Found ZIP: $ZIP_FILE"
+          echo "Found: $ZIP_FILE"
 
           mkdir -p extracted
-          unzip -o "$ZIP_FILE" -d extracted
+          unzip -o -q "$ZIP_FILE" -d extracted
 
       - name: Locate Android Project
         shell: bash
         run: |
           set -e
 
-          PROJECT_FILE=$(find extracted -type f \
-            \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) \
-            | head -n 1)
+          PROJECT_DIR=""
 
-          if [ -z "$PROJECT_FILE" ]; then
-            echo "ERROR: Android Gradle settings file not found"
-            find extracted -maxdepth 5 -type f
+          while IFS= read -r FILE; do
+            CANDIDATE="$(dirname "$FILE")"
+
+            if [ -f "$CANDIDATE/build.gradle" ] || \
+               [ -f "$CANDIDATE/build.gradle.kts" ]; then
+              PROJECT_DIR="$CANDIDATE"
+              break
+            fi
+          done < <(
+            find extracted -type f \
+              \( -name settings.gradle \
+              -o -name settings.gradle.kts \)
+          )
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Android Gradle project not found."
+            find extracted -maxdepth 6 -type f
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$PROJECT_FILE")
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project: $PROJECT_DIR"
+          echo "Found project: $PROJECT_DIR"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK Packages
-        run: |
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -102,16 +108,19 @@ jobs:
         run: |
           set -e
 
-          APK_FILE=$(find "$PROJECT_DIR" -type f \
+          APK_FILE=$(find "$PROJECT_DIR" \
+            -type f \
             -path '*/build/outputs/apk/*' \
-            -name '*.apk' | head -n 1)
+            -name '*.apk' \
+            | head -n 1)
 
           if [ -z "$APK_FILE" ]; then
-            echo "ERROR: APK was not generated"
+            echo "ERROR: APK was not generated."
+            find "$PROJECT_DIR" -type f -name '*.apk'
             exit 1
           fi
 
-          echo "APK successfully generated:"
+          echo "APK generated successfully:"
           ls -lh "$APK_FILE"
 
       - name: Upload APK

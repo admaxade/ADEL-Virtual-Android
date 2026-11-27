@@ -32,7 +32,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y unzip
 
-      # 4. البحث عن ملف ZIP وفك ضغطه
+      # 4. البحث عن ملف ZIP وفك الضغط
       - name: Extract Project ZIP
         shell: bash
         run: |
@@ -45,7 +45,6 @@ jobs:
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: Project ZIP not found!"
-            echo "Available ZIP files:"
             find . -type f -iname '*.zip'
             exit 1
           fi
@@ -72,7 +71,7 @@ jobs:
           fi
 
           if [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "ERROR: VineOS app/build.gradle.kts not found!"
+            echo "ERROR: app/build.gradle.kts not found!"
             exit 1
           fi
 
@@ -89,7 +88,7 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
-      # 7. تثبيت حزم Android SDK
+      # 7. تثبيت Android SDK 36 وNDK وCMake
       - name: Install Android SDK Packages
         shell: bash
         run: |
@@ -105,9 +104,9 @@ jobs:
 
           yes | "$SDKMANAGER" --licenses || true
 
-          "$SDKMANAGER" \
+          "$SDKMANAGER" --install \
             "platform-tools" \
-            "platforms;android-37" \
+            "platforms;android-36" \
             "build-tools;35.0.0" \
             "ndk;26.1.10909125" \
             "cmake;3.22.1"
@@ -118,7 +117,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # 9. فحص بيئة البناء
+      # 9. التحقق من بيئة البناء
       - name: Verify Build Environment
         shell: bash
         run: |
@@ -133,13 +132,17 @@ jobs:
           echo "Project directory:"
           echo "$PROJECT_DIR"
 
+          echo "Installed SDK platforms:"
+          ls "$ANDROID_HOME/platforms"
+
           cd "$PROJECT_DIR"
 
-          echo "Gradle version:"
           chmod +x gradlew
+
+          echo "Gradle version:"
           ./gradlew --version
 
-      # 10. بناء APK
+      # 10. بناء التطبيق
       - name: Build ADEL Virtual Android APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -178,7 +181,7 @@ jobs:
           echo "APK generated successfully:"
           ls -lh "$APK_FILE"
 
-      # 12. رفع APK إلى GitHub Actions
+      # 12. رفع APK
       - name: Upload ADEL APK
         uses: actions/upload-artifact@v4
         with:

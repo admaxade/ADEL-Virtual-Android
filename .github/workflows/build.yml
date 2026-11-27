@@ -2,9 +2,9 @@ name: Build VineOS Debug APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
 
 permissions:
@@ -13,7 +13,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     defaults:
       run:
         shell: bash
@@ -27,66 +26,74 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y unzip
 
-      - name: Find and Extract VineOS ZIP
+      - name: Find and extract VineOS source ZIP
         id: extract
         run: |
           set -euo pipefail
-
-          mapfile -t ZIP_FILES < <(
-            find . -type f -iname '*.zip' \
-              ! -path './.git/*' \
-              ! -path './extracted/*' \
-              -print
-          )
-
-          if [ "${#ZIP_FILES[@]}" -eq 0 ]; then
-            echo "::error::No project ZIP found!"
-            exit 1
-          fi
-
-          if [ "${#ZIP_FILES[@]}" -gt 1 ]; then
-            echo "::error::Multiple ZIP files found. Keep only one."
+          mapfile -t ZIP_FILES < <(find . -type f -iname '*.zip' ! -path './.git/*' ! -path './extracted/*' -print)
+          if [ "${#ZIP_FILES[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one source ZIP; found ${#ZIP_FILES[@]}"
             printf '%s\n' "${ZIP_FILES[@]}"
             exit 1
           fi
-
-          ZIP_FILE="${ZIP_FILES[0]}"
-          echo "Extracting: $ZIP_FILE"
-
-          unzip -tq "$ZIP_FILE"
-
+          unzip -tq "${ZIP_FILES[0]}"
           rm -rf extracted
           mkdir -p extracted
-          unzip -q "$ZIP_FILE" -d extracted
+          unzip -q "${ZIP_FILES[0]}" -d extracted
 
-      - name: Locate VineOS Gradle Project
-        id: locate
+      - name: Locate VineOS Gradle project and enforce API 37
+        id: project
         run: |
           set -euo pipefail
-
-          mapfile -t WRAPPERS < <(
-            find extracted -type f -name gradlew -print
-          )
-
           PROJECT_DIR=""
-
-          for WRAPPER in "${WRAPPERS[@]}"; do
+          while IFS= read -r WRAPPER; do
             CANDIDATE="$(dirname "$WRAPPER")"
-
-            if [ -f "$CANDIDATE/settings.gradle" ] || \
-               [ -f "$CANDIDATE/settings.gradle.kts" ]; then
-              PROJECT_DIR="$CANDIDATE"
-              break
+            if [[ -f "$CANDIDATE/settings.gradle.kts" || -f "$CANDIDATE/settings.gradle" ]] && \
+               [[ -f "$CANDIDATE/app/build.gradle.kts" || -f "$CANDIDATE/app/build.gradle" ]]; then
+              if grep -Rqs 'com.hexadecinull.vineos' "$CANDIDATE/app"; then
+                PROJECT_DIR="$CANDIDATE"
+                break
+              fi
             fi
-          done
+          done < <(find extracted -type f -name gradlew -print)
 
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "::error::VineOS Gradle project not found!"
+          if [[ -z "$PROJECT_DIR" ]]; then
+            echo "::error::Could not locate the VineOS Gradle project."
+            find extracted -maxdepth 6 \( -name settings.gradle -o -name settings.gradle.kts -o -name gradlew \) -print
             exit 1
           fi
 
+          APP_GRADLE="$PROJECT_DIR/app/build.gradle.kts"
+          if [[ -f "$APP_GRADLE" ]]; then
+            python3 - "$APP_GRADLE" <<'PY'
+          import pathlib, re, sys
+          p = pathlib.Path(sys.argv[1])
+          s = p.read_text()
+          pattern = r'(?m)^(\s*compileSdk\s*=\s*)\d+(\s*(?://.*)?)$'
+          s2, count = re.subn(pattern, r'\g<1>37\g<2>', s, count=1)
+          if count == 0:
+              raise SystemExit('compileSdk assignment not found in app/build.gradle.kts')
+          p.write_text(s2)
+          PY
+          else
+            APP_GRADLE="$PROJECT_DIR/app/build.gradle"
+            python3 - "$APP_GRADLE" <<'PY'
+          import pathlib, re, sys
+          p = pathlib.Path(sys.argv[1])
+          s = p.read_text()
+          s2, count = re.subn(r'(?m)^(\s*compileSdk\s+)\d+(\s*(?://.*)?)$', r'\g<1>37\g<2>', s, count=1)
+          if count == 0:
+              raise SystemExit('compileSdk assignment not found in app/build.gradle')
+          p.write_text(s2)
+          PY
+          fi
+
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-          echo "✅ Found project: $PROJECT_DIR"
+          echo "VineOS project: $PROJECT_DIR"
+          grep -n 'compileSdk' "$PROJECT_DIR/app/build.gradle"* | head -n 5
+          grep -Eq 'compileSdk[[:space:]]*(=[[:space:]]*)?37([[:space:]]|$)' "$PROJECT_DIR/app/build.gradle"* || {
+            echo "::error::compileSdk was not set to 37"; exit 1;
+          }
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -94,95 +101,40 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: gradle
-          cache-dependency-path: |
-            ${{ steps.locate.outputs.project_dir }}/**/*.gradle*
-            ${{ steps.locate.outputs.project_dir }}/**/gradle-wrapper.properties
+          cache-dependency-path: ${{ steps.project.outputs.project_dir }}/gradle/wrapper/gradle-wrapper.properties
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: ''          # لا تثبت شيء هنا لتجنب الفشل
 
-      - name: Normalize & Detect compileSdk
-        id: sdk
-        working-directory: ${{ steps.locate.outputs.project_dir }}
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null || true
+
+      - name: Install Android SDK components
         run: |
           set -euo pipefail
-
-          GRADLE_FILE="app/build.gradle.kts"
-
-          if [ ! -f "$GRADLE_FILE" ]; then
-            echo "::error::app/build.gradle.kts not found!"
-            exit 1
-          fi
-
-          # حماية إضافية: تحويل 37 إلى 36 إذا وُجد
-          sed -i 's/compileSdk[[:space:]]*=[[:space:]]*37/compileSdk = 36/g' "$GRADLE_FILE"
-          sed -i 's/targetSdk[[:space:]]*=[[:space:]]*37/targetSdk = 36/g' "$GRADLE_FILE"
-
-          COMPILE_SDK=$(grep -E 'compileSdk[[:space:]]*=' "$GRADLE_FILE" \
-            | head -n 1 \
-            | grep -oE '[0-9]+' \
-            | head -n 1 || true)
-
-          if [ -z "$COMPILE_SDK" ]; then
-            echo "::error::Could not detect compileSdk automatically."
-            grep -n 'compileSdk' "$GRADLE_FILE" || true
-            exit 1
-          fi
-
-          echo "compile_sdk=$COMPILE_SDK" >> "$GITHUB_OUTPUT"
-          echo "✅ Using compileSdk: $COMPILE_SDK"
-
-      - name: Accept Android SDK Licenses
-        run: |
-          set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-
-      - name: Install Android SDK Components
-        run: |
-          set -euo pipefail
-
-          COMPILE_SDK="${{ steps.sdk.outputs.compile_sdk }}"
-
           sdkmanager --install \
             "platform-tools" \
-            "platforms;android-${COMPILE_SDK}" \
+            "platforms;android-37" \
             "build-tools;36.0.0" \
             "cmake;3.22.1"
 
-          echo "✅ Installed: platforms;android-${COMPILE_SDK} + build-tools;36.0.0"
-
       - name: Build VineOS Debug APK
-        working-directory: ${{ steps.locate.outputs.project_dir }}
+        working-directory: ${{ steps.project.outputs.project_dir }}
         run: |
           set -euo pipefail
           chmod +x ./gradlew
-          ./gradlew \
-            --no-daemon \
-            --stacktrace \
-            assembleDebug
+          ./gradlew --no-daemon --stacktrace --warning-mode all assembleDebug
 
       - name: Verify APK
         id: apk
         run: |
           set -euo pipefail
-
-          PROJECT_DIR="${{ steps.locate.outputs.project_dir }}"
-
-          mapfile -t APKS < <(
-            find "$PROJECT_DIR" \
-              -type f \
-              -path '*/build/outputs/apk/debug/*.apk' \
-              -size +0c \
-              -print
-          )
-
+          PROJECT_DIR="${{ steps.project.outputs.project_dir }}"
+          mapfile -t APKS < <(find "$PROJECT_DIR/app/build/outputs/apk/debug" -maxdepth 1 -type f -name '*.apk' -size +0c -print 2>/dev/null || true)
           if [ "${#APKS[@]}" -eq 0 ]; then
-            echo "::error::APK was not generated!"
+            echo "::error::No non-empty debug APK was generated."
             exit 1
           fi
-
           APK_FILE="${APKS[0]}"
           echo "apk_path=$APK_FILE" >> "$GITHUB_OUTPUT"
           ls -lh "$APK_FILE"

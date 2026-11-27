@@ -11,12 +11,12 @@ permissions:
 
 jobs:
   build:
-    name: Build Unified Android APK
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
-      # 1. تحميل ملفات المستودع
-      - name: Checkout repository
+      # 1. تحميل المستودع
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       # 2. إعداد Java 17
@@ -26,13 +26,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # 3. تثبيت unzip
-      - name: Install unzip
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y unzip
-
-      # 4. البحث عن ملف ZIP وفك الضغط
+      # 3. البحث عن ملف ZIP وفك ضغطه
       - name: Extract Project ZIP
         shell: bash
         run: |
@@ -40,12 +34,11 @@ jobs:
 
           ZIP_FILE=$(find . -type f \
             -iname 'ADEL_Virtual_Android*.zip' \
-            ! -path './.git/*' \
-            | head -n 1)
+            ! -path './.git/*' | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP not found!"
-            find . -type f -iname '*.zip'
+            echo "ERROR: Project ZIP file not found!"
+            find . -type f -iname '*.zip' ! -path './.git/*'
             exit 1
           fi
 
@@ -54,41 +47,13 @@ jobs:
           mkdir -p extracted
           unzip -o -q "$ZIP_FILE" -d extracted
 
-          echo "Project extracted successfully."
+          echo "ZIP extracted successfully."
 
-      # 5. تحديد مشروع VineOS الرئيسي
-      - name: Locate VineOS Main Project
-        shell: bash
-        run: |
-          set -e
-
-          PROJECT_DIR="extracted/ADEL_Virtual_Android_MERGED_ALPHA/vineos-engine/VineOS-0.1.0-alpha"
-
-          if [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            echo "ERROR: VineOS settings.gradle.kts not found!"
-            find extracted -name settings.gradle.kts
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "ERROR: app/build.gradle.kts not found!"
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/gradlew" ]; then
-            echo "ERROR: Gradle Wrapper not found!"
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          echo "VineOS project verified."
-
-      # 6. إعداد Android SDK
+      # 4. إعداد Android SDK
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
-      # 7. تثبيت Android SDK 36 وNDK وCMake
+      # 5. تثبيت حزم SDK الأساسية ومحاولة تثبيت API 37
       - name: Install Android SDK Packages
         shell: bash
         run: |
@@ -96,14 +61,9 @@ jobs:
 
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 
-          if [ ! -f "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found!"
-            find "$ANDROID_HOME/cmdline-tools" -name sdkmanager
-            exit 1
-          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
 
-          yes | "$SDKMANAGER" --licenses || true
-
+          # الحزم الأساسية
           "$SDKMANAGER" --install \
             "platform-tools" \
             "platforms;android-36" \
@@ -111,81 +71,94 @@ jobs:
             "ndk;26.1.10909125" \
             "cmake;3.22.1"
 
-          echo "Android SDK packages installed successfully."
+          # محاولة تثبيت Android 37.0
+          if "$SDKMANAGER" --install "platforms;android-37.0"; then
 
-      # 8. إعداد Gradle
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+            echo "Android 37.0 installed successfully."
 
-      # 9. التحقق من بيئة البناء
-      - name: Verify Build Environment
-        shell: bash
-        run: |
-          set -e
+            # إنشاء رابط رمزي للتوافق مع Gradle
+            if [ ! -e "$ANDROID_HOME/platforms/android-37" ]; then
+              ln -s \
+                "$ANDROID_HOME/platforms/android-37.0" \
+                "$ANDROID_HOME/platforms/android-37"
+            fi
 
-          echo "Java version:"
-          java -version
-
-          echo "Android SDK:"
-          echo "$ANDROID_HOME"
-
-          echo "Project directory:"
-          echo "$PROJECT_DIR"
-
-          echo "Installed SDK platforms:"
-          ls "$ANDROID_HOME/platforms"
-
-          cd "$PROJECT_DIR"
-
-          chmod +x gradlew
-
-          echo "Gradle version:"
-          ./gradlew --version
-
-      # 10. بناء التطبيق
-      - name: Build ADEL Virtual Android APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -e
-
-          ./gradlew \
-            --no-daemon \
-            --stacktrace \
-            assembleDebug
-
-      # 11. التحقق من إنشاء APK
-      - name: Verify APK
-        shell: bash
-        run: |
-          set -e
-
-          APK_DIR="$PROJECT_DIR/app/build/outputs/apk/debug"
-
-          if [ ! -d "$APK_DIR" ]; then
-            echo "ERROR: APK output directory not found!"
-            exit 1
+          else
+            echo "Android 37.0 unavailable."
+            echo "Continuing with Android 36."
           fi
 
-          APK_FILE=$(find "$APK_DIR" \
-            -maxdepth 1 \
+      # 6. تحديد مجلد المشروع
+      - name: Locate Android Project
+        shell: bash
+        run: |
+          set -e
+
+          GRADLE_FILE=$(find extracted \
             -type f \
-            -name '*.apk' \
+            -name gradlew \
             | head -n 1)
 
-          if [ -z "$APK_FILE" ]; then
-            echo "ERROR: APK was not generated!"
+          if [ -z "$GRADLE_FILE" ]; then
+            echo "ERROR: Gradle project not found inside ZIP."
             exit 1
           fi
 
-          echo "APK generated successfully:"
-          ls -lh "$APK_FILE"
+          PROJECT_DIR=$(dirname "$GRADLE_FILE")
 
-      # 12. رفع APK
-      - name: Upload ADEL APK
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Project found: $PROJECT_DIR"
+
+      # 7. إعطاء صلاحيات Gradle
+      - name: Grant Gradle Permissions
+        run: chmod +x "$PROJECT_DIR/gradlew"
+
+      # 8. فحص إصدارات SDK المتاحة
+      - name: Verify Android SDK
+        shell: bash
+        run: |
+          echo "Available Android platforms:"
+          ls -la "$ANDROID_HOME/platforms"
+
+      # 9. بناء APK
+      - name: Build Debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          ./gradlew \
+            --no-daemon \
+            assembleDebug \
+            --stacktrace
+
+      # 10. استخراج APK
+      - name: Find APK
+        shell: bash
+        run: |
+          set -e
+
+          APK=$(find "$PROJECT_DIR" \
+            -type f \
+            -path '*/build/outputs/apk/*/*.apk' \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          mkdir -p release
+
+          cp "$APK" \
+            release/ADEL_Virtual_Android.apk
+
+          echo "APK generated successfully:"
+          ls -lh release/ADEL_Virtual_Android.apk
+
+      # 11. رفع APK إلى GitHub
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ADEL-Virtual-Android-Alpha
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          name: ADEL-Virtual-Android-APK
+          path: release/ADEL_Virtual_Android.apk
           if-no-files-found: error
           retention-days: 7

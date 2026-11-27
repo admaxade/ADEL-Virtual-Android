@@ -13,75 +13,80 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check project structure & locate VineOS
-        id: check
+      - name: Locate VineOS Project
+        id: locate
         run: |
-          set -e
-          echo "Repository root: $(pwd)"
-          ls -la
-          echo "Searching for Gradle wrapper:"
-          find . -name gradlew -type f
-
-          GRADLEW_PATH=$(find . -name gradlew -type f | grep -i "vineos" | head -n 1)
-          if [ -z "$GRADLEW_PATH" ]; then
-            GRADLEW_PATH=$(find . -name gradlew -type f | head -n 1)
-          fi
-
-          if [ -z "$GRADLEW_PATH" ]; then
-            echo "::error::Gradle wrapper (gradlew) not found!"
+          set -euo pipefail
+          if [ -f "ADEL_Virtual_Android_MERGED_ALPHA/vineos-engine/VineOS-0.1.0-alpha/gradlew" ]; then
+            PROJECT_DIR="ADEL_Virtual_Android_MERGED_ALPHA/vineos-engine/VineOS-0.1.0-alpha"
+          elif [ -f "vineos-engine/VineOS-0.1.0-alpha/gradlew" ]; then
+            PROJECT_DIR="vineos-engine/VineOS-0.1.0-alpha"
+          else
+            echo "::error::VineOS project directory not found! Check repository root structure."
+            ls -la
             exit 1
           fi
-
-          PROJECT_DIR=$(dirname "$GRADLEW_PATH")
-          if [ ! -f "$PROJECT_DIR/settings.gradle" ] && [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            echo "::error::settings.gradle or settings.gradle.kts not found in $PROJECT_DIR"
-            exit 1
-          fi
-
-          echo "project_dir=$PROJECT_DIR" >> $GITHUB_OUTPUT
-          echo "✅ Verified VineOS project directory: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "✅ Found VineOS project at: $PROJECT_DIR"
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
         with:
+          distribution: temurin
           java-version: '21'
-          distribution: 'temurin'
+          cache: gradle
+          cache-dependency-path: |
+            ${{ steps.locate.outputs.project_dir }}/**/*.gradle*
+            ${{ steps.locate.outputs.project_dir }}/**/gradle-wrapper.properties
 
-      - name: Setup Android SDK
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK 37 & Build Tools
+      - name: Install Android SDK components
         run: |
-          yes | sdkmanager --licenses > /dev/null
-          sdkmanager "platforms;android-37" "build-tools;35.0.0"
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-37" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1"
 
-      - name: Grant execute permission for gradlew
-        working-directory: ${{ steps.check.outputs.project_dir }}
-        run: chmod +x gradlew
-
-      - name: Build Debug APK
-        working-directory: ${{ steps.check.outputs.project_dir }}
-        run: ./gradlew --no-daemon assembleDebug --stacktrace
-
-      - name: Verify APK
-        working-directory: ${{ steps.check.outputs.project_dir }}
+      - name: Build VineOS Debug APK
+        working-directory: ${{ steps.locate.outputs.project_dir }}
         run: |
-          set -e
-          APK_FILE=$(find . -type f -path "*/build/outputs/apk/debug/*.apk" -print -quit)
-          test -n "$APK_FILE"
-          test -s "$APK_FILE"
-          ls -lh "$APK_FILE"
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
 
-      - name: Upload APK Artifact
+      - name: Verify APK output
+        id: apk
+        run: |
+          set -euo pipefail
+          mapfile -t APKS < <(
+            find "${{ steps.locate.outputs.project_dir }}/app/build/outputs/apk/debug" \
+              -maxdepth 1 -type f -name '*.apk' -size +0c -print 2>/dev/null
+          )
+
+          if [ "${#APKS[@]}" -eq 0 ]; then
+            echo "::error::Debug APK was not generated."
+            exit 1
+          fi
+
+          echo "apk_path=${APKS[0]}" >> "$GITHUB_OUTPUT"
+          ls -lh "${APKS[0]}"
+
+      - name: Upload VineOS Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: VineOS-Debug-APK
-          path: ${{ steps.check.outputs.project_dir }}/**/build/outputs/apk/debug/*.apk
+          path: ${{ steps.apk.outputs.apk_path }}
           if-no-files-found: error
           retention-days: 14
-          

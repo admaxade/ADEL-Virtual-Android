@@ -73,13 +73,38 @@ jobs:
             fi
           fi
 
-          # 2. إصلاح خطأ Dagger/Hilt في VromProvisioner.kt
+          # 2. Fix Hilt MissingBinding for VromProvisioner
           VROM_FILE="$PROJECT_DIR/app/src/main/java/com/hexadecinull/vineos/data/repository/VromProvisioner.kt"
-          if [[ -f "$VROM_FILE" ]] && ! grep -q "@Inject" "$VROM_FILE"; then
-            sed -i '1a import javax.inject.Inject' "$VROM_FILE"
-            sed -i 's/class VromProvisioner(/class VromProvisioner @Inject constructor(/g' "$VROM_FILE"
-            sed -i 's/class VromProvisioner (/class VromProvisioner @Inject constructor(/g' "$VROM_FILE"
-            echo "✅ Added @Inject constructor to VromProvisioner.kt"
+          if [[ -f "$VROM_FILE" ]]; then
+            python3 - "$VROM_FILE" <<'PY'
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, "r", encoding="utf-8") as f:
+              source = f.read()
+
+          if "import javax.inject.Inject" not in source:
+              source = source.replace(
+                  "package com.hexadecinull.vineos.data.repository",
+                  "package com.hexadecinull.vineos.data.repository\n\nimport javax.inject.Inject",
+                  1
+              )
+
+          source = source.replace(
+              "class VromProvisioner {",
+              "class VromProvisioner @Inject constructor() {",
+              1
+          )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(source)
+
+          if "@Inject constructor()" not in source:
+              raise SystemExit("VromProvisioner fix was not applied")
+
+          print("✅ VromProvisioner Hilt fix applied successfully")
+          PY
           fi
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"

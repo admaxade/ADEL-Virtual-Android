@@ -19,67 +19,57 @@ jobs:
         shell: bash
 
     steps:
-      # 1. Download repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Install ZIP tools
       - name: Install ZIP tools
         run: |
           sudo apt-get update
           sudo apt-get install -y unzip
 
-      # 3. Find and extract project ZIP
       - name: Find and Extract VineOS ZIP
         id: extract
         run: |
           set -euo pipefail
 
-          mapfile -t ZIP_FILES < <(
-            find . -type f -iname '*.zip' \
+          EXPECTED_ZIP="ADEL_Virtual_Android_PHASE1_GITHUB_READY.zip"
+
+          mapfile -t MATCHES < <(
+            find . -type f -name "$EXPECTED_ZIP" \
               ! -path './.git/*' \
-              ! -path './extracted/*' \
-              -print
+              ! -path './extracted/*'
           )
 
-          if [ "${#ZIP_FILES[@]}" -eq 0 ]; then
-            echo "::error::No ZIP file found!"
-            find . -maxdepth 5 -type f
+          if [ "${#MATCHES[@]}" -eq 0 ]; then
+            echo "::error::Project ZIP not found!"
+            find . -type f -iname '*.zip'
             exit 1
           fi
 
-          if [ "${#ZIP_FILES[@]}" -gt 1 ]; then
-            echo "::error::Multiple ZIP files found. Keep only the project ZIP."
-            printf '%s\n' "${ZIP_FILES[@]}"
+          if [ "${#MATCHES[@]}" -gt 1 ]; then
+            echo "::error::Multiple project ZIP files found!"
+            printf '%s\n' "${MATCHES[@]}"
             exit 1
           fi
-
-          ZIP_FILE="${ZIP_FILES[0]}"
-
-          echo "Found ZIP: $ZIP_FILE"
-
-          unzip -tq "$ZIP_FILE"
 
           rm -rf extracted
           mkdir -p extracted
 
-          unzip -q "$ZIP_FILE" -d extracted
+          unzip -q "${MATCHES[0]}" -d extracted
 
           echo "ZIP extracted successfully."
 
-      # 4. Locate Gradle project
       - name: Locate VineOS Gradle Project
         id: locate
         run: |
           set -euo pipefail
 
           mapfile -t WRAPPERS < <(
-            find extracted -type f -name gradlew -print
+            find extracted -type f -name gradlew
           )
 
           if [ "${#WRAPPERS[@]}" -eq 0 ]; then
-            echo "::error::Gradle wrapper not found!"
-            find extracted -maxdepth 7 -type f | head -n 200
+            echo "::error::gradlew not found!"
             exit 1
           fi
 
@@ -96,18 +86,16 @@ jobs:
           done
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "::error::Gradle settings file not found!"
+            echo "::error::Gradle project settings not found!"
             exit 1
           fi
 
+          PROJECT_DIR="${PROJECT_DIR#./}"
+
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-          echo "VineOS project found:"
-          echo "$PROJECT_DIR"
+          echo "Project found: $PROJECT_DIR"
 
-          ls -la "$PROJECT_DIR"
-
-      # 5. Setup Java
       - name: Set up JDK 21
         uses: actions/setup-java@v5
         with:
@@ -118,35 +106,99 @@ jobs:
             ${{ steps.locate.outputs.project_dir }}/**/*.gradle*
             ${{ steps.locate.outputs.project_dir }}/**/gradle-wrapper.properties
 
-      # 6. Setup Android SDK
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK
+        run: |
+          set -euo pipefail
 
-      # 7. Accept Android licenses
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+
+          if [ ! -d "$SDK" ]; then
+            echo "::error::Android SDK directory not found!"
+            exit 1
+          fi
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+
+          SDKMANAGER=""
+
+          for CANDIDATE in \
+            "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "$SDK/tools/bin/sdkmanager"; do
+
+            if [ -x "$CANDIDATE" ]; then
+              SDKMANAGER="$CANDIDATE"
+              break
+            fi
+          done
+
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK/cmdline-tools" \
+              -type f -name sdkmanager -path '*/bin/sdkmanager' \
+              2>/dev/null | sort -V | tail -n 1 || true)"
+          fi
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager not found!"
+            exit 1
+          fi
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+
+          echo "Android SDK Manager:"
+          "$SDKMANAGER" --version
+
+      - name: Detect Android compileSdk
+        working-directory: ${{ steps.locate.outputs.project_dir }}
+        run: |
+          set -euo pipefail
+
+          SDK_VERSION="$(python3 - <<'PY'
+          import glob
+          import re
+          import sys
+
+          files = glob.glob("**/build.gradle", recursive=True)
+          files += glob.glob("**/build.gradle.kts", recursive=True)
+
+          patterns = [
+              r'compileSdk\s*=\s*(\d+)',
+              r'compileSdkVersion\s*\(?\s*(\d+)',
+          ]
+
+          for path in files:
+              with open(path, encoding="utf-8") as f:
+                  content = f.read()
+
+              for pattern in patterns:
+                  match = re.search(pattern, content)
+
+                  if match:
+                      print(match.group(1))
+                      sys.exit(0)
+
+          sys.exit("Could not detect compileSdk in Gradle files.")
+          PY
+          )"
+
+          echo "Detected Android API: $SDK_VERSION"
+
+          echo "ANDROID_API=$SDK_VERSION" >> "$GITHUB_ENV"
+
       - name: Accept Android SDK Licenses
         run: |
           set -euo pipefail
 
-          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses || true
 
-          if [ ! -x "$SDKMANAGER" ]; then
-            SDKMANAGER="$(command -v sdkmanager)"
-          fi
-
-          yes | "$SDKMANAGER" --licenses
-
-      # 8. Install Android components
       - name: Install Android SDK Components
         run: |
           set -euo pipefail
 
-          sdkmanager \
+          "$SDKMANAGER" \
             "platform-tools" \
-            "platforms;android-37" \
-            "build-tools;35.0.0" \
-            "cmake;3.22.1"
+            "platforms;android-$ANDROID_API" \
+            "build-tools;35.0.0"
 
-      # 9. Build APK
       - name: Build VineOS Debug APK
         working-directory: ${{ steps.locate.outputs.project_dir }}
         run: |
@@ -159,8 +211,7 @@ jobs:
             --stacktrace \
             assembleDebug
 
-      # 10. Find APK
-      - name: Verify APK
+      - name: Verify APK Output
         id: apk
         run: |
           set -euo pipefail
@@ -171,13 +222,11 @@ jobs:
             find "$PROJECT_DIR" \
               -type f \
               -path '*/build/outputs/apk/debug/*.apk' \
-              -size +0c \
-              -print
+              -size +0c -print
           )
 
           if [ "${#APKS[@]}" -eq 0 ]; then
-            echo "::error::APK was not generated!"
-            find "$PROJECT_DIR" -type d -path '*/build/outputs/*'
+            echo "::error::Debug APK was not generated!"
             exit 1
           fi
 
@@ -185,10 +234,9 @@ jobs:
 
           echo "apk_path=$APK_FILE" >> "$GITHUB_OUTPUT"
 
-          echo "APK successfully generated:"
+          echo "APK generated successfully:"
           ls -lh "$APK_FILE"
 
-      # 11. Upload APK
       - name: Upload VineOS Debug APK
         uses: actions/upload-artifact@v4
         with:

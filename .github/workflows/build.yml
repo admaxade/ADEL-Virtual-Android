@@ -2,9 +2,9 @@ name: Build VineOS Debug APK
 
 on:
   push:
-    branches: [main, master]
+    branches: [ main, master ]
   pull_request:
-    branches: [main, master]
+    branches: [ main, master ]
   workflow_dispatch:
 
 permissions:
@@ -104,10 +104,14 @@ jobs:
           cache-dependency-path: ${{ steps.project.outputs.project_dir }}/gradle/wrapper/gradle-wrapper.properties
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
 
       - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses >/dev/null || true
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
 
       - name: Install Android SDK components
         run: |
@@ -117,6 +121,7 @@ jobs:
             "platforms;android-37" \
             "build-tools;36.0.0" \
             "cmake;3.22.1"
+          echo "✅ SDK components installed successfully"
 
       - name: Build VineOS Debug APK
         working-directory: ${{ steps.project.outputs.project_dir }}

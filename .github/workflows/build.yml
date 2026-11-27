@@ -26,25 +26,26 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # 3. تثبيت أدوات فك الضغط
+      # 3. تثبيت أداة فك الضغط
       - name: Install unzip
         run: |
           sudo apt-get update
           sudo apt-get install -y unzip
 
-      # 4. العثور على ملف المشروع وفك ضغطه
+      # 4. البحث عن ملف ZIP في جميع المجلدات وفك ضغطه
       - name: Extract Project ZIP
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE=$(find . -maxdepth 2 -type f \
+          ZIP_FILE=$(find . -type f \
             -iname 'ADEL_Virtual_Android*.zip' \
             ! -path './.git/*' \
             | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: Project ZIP not found!"
+            echo "Available ZIP files:"
             find . -type f -iname '*.zip'
             exit 1
           fi
@@ -53,6 +54,8 @@ jobs:
 
           mkdir -p extracted
           unzip -o -q "$ZIP_FILE" -d extracted
+
+          echo "Project extracted successfully."
 
       # 5. تحديد مشروع VineOS الرئيسي
       - name: Locate VineOS Main Project
@@ -64,6 +67,7 @@ jobs:
 
           if [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
             echo "ERROR: VineOS settings.gradle.kts not found!"
+            echo "Available Gradle settings:"
             find extracted -name settings.gradle.kts
             exit 1
           fi
@@ -82,7 +86,7 @@ jobs:
 
           echo "VineOS project verified."
 
-      # 6. إعداد Android SDK 37 وNDK وCMake
+      # 6. إعداد Android SDK وNDK وCMake
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
@@ -97,7 +101,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # 8. فحص إعدادات المشروع
+      # 8. التحقق من بيئة البناء
       - name: Verify Build Environment
         shell: bash
         run: |
@@ -112,11 +116,12 @@ jobs:
           echo "Project directory:"
           echo "$PROJECT_DIR"
 
-          echo "Gradle wrapper:"
           cd "$PROJECT_DIR"
+
+          echo "Gradle version:"
           ./gradlew --version
 
-      # 9. بناء التطبيق
+      # 9. بناء APK
       - name: Build ADEL Virtual Android APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -130,7 +135,7 @@ jobs:
             --stacktrace \
             assembleDebug
 
-      # 10. التأكد من إنشاء APK
+      # 10. التحقق من إنشاء APK
       - name: Verify APK
         shell: bash
         run: |

@@ -11,35 +11,29 @@ permissions:
 
 jobs:
   build:
-    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Download repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Install Java
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # 3. Install unzip
       - name: Install unzip
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
 
-      # 4. Find and extract project ZIP
-      - name: Extract project ZIP
+      - name: Find and Extract Project ZIP
         run: |
-          ZIP_FILE=$(find . -type f -iname "*.zip" \
-            -not -path "./.git/*" -print -quit)
+          ZIP_FILE=$(find . -type f -iname "ADEL_Virtual_Android_GitHub_Actions_CLEAN.zip" -print -quit)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP not found!"
+            echo "ERROR: Project ZIP file not found!"
+            echo "Available ZIP files:"
+            find . -type f -iname "*.zip"
             exit 1
           fi
 
@@ -48,78 +42,63 @@ jobs:
           mkdir -p extracted
           unzip -o "$ZIP_FILE" -d extracted
 
-          echo "ZIP extraction completed."
+          echo "ZIP extracted successfully."
 
-      # 5. Set up Android SDK
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
-      # 6. Install Android SDK packages
-      - name: Install SDK packages
+      - name: Install Android SDK Packages
         run: |
-          yes | sdkmanager --licenses > /dev/null
-
+          sdkmanager --licenses
           sdkmanager \
-            "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      # 7. Set up Gradle
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      # 8. Locate Android project
-      - name: Locate Android project
+      - name: Locate Android Project
         id: project
         run: |
-          PROJECT_DIR=$(find extracted \
-            -type f \
+          PROJECT_DIR=$(find extracted -type f \
             \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
-            -exec dirname {} \; | head -n 1)
+            -print -quit | xargs -r dirname)
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: settings.gradle not found!"
-            find extracted -maxdepth 4 -type f
+            echo "ERROR: settings.gradle was not found!"
+            echo "Extracted files:"
+            find extracted -maxdepth 4 -type f | head -100
             exit 1
           fi
 
           echo "Project directory: $PROJECT_DIR"
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-      # 9. Build APK
-      - name: Build APK
-        working-directory: ${{ steps.project.outputs.project_dir }}
+      - name: Build Android APK
         run: |
+          cd "${{ steps.project.outputs.project_dir }}"
           gradle --no-daemon assembleDebug
 
-      # 10. Verify APK
       - name: Verify APK
-        id: verify
         run: |
-          PROJECT_DIR="${{ steps.project.outputs.project_dir }}"
+          APK="${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk"
 
-          APK_FILE=$(find "$PROJECT_DIR" \
-            -type f \
-            -path "*/build/outputs/apk/*/*.apk" \
-            -print -quit)
-
-          if [ -z "$APK_FILE" ]; then
-            echo "ERROR: APK file was not generated!"
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated!"
+            find "${{ steps.project.outputs.project_dir }}" -type f -name "*.apk"
             exit 1
           fi
 
-          echo "APK generated successfully:"
-          echo "$APK_FILE"
+          echo "APK generated successfully!"
+          ls -lh "$APK"
 
-          echo "apk_path=$APK_FILE" >> "$GITHUB_OUTPUT"
-
-      # 11. Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ADEL-Virtual-Android-APK
-          path: ${{ steps.verify.outputs.apk_path }}
+          path: ${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 14

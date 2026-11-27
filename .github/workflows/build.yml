@@ -30,16 +30,18 @@ jobs:
         id: extract
         run: |
           set -euo pipefail
-          mapfile -t ZIP_FILES < <(find . -type f -iname '*.zip' ! -path './.git/*' ! -path './extracted/*' -print)
-          if [ "${#ZIP_FILES[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one source ZIP; found ${#ZIP_FILES[@]}"
-            printf '%s\n' "${ZIP_FILES[@]}"
+          ZIP_COUNT=$(find . -type f -iname '*.zip' ! -path './.git/*' ! -path './extracted/*' | wc -l)
+          if [ "$ZIP_COUNT" -ne 1 ]; then
+            echo "::error::Expected exactly one source ZIP; found $ZIP_COUNT"
+            find . -type f -iname '*.zip' ! -path './.git/*' ! -path './extracted/*'
             exit 1
           fi
-          unzip -tq "${ZIP_FILES}"
+          ZIP_FILE=$(find . -type f -iname '*.zip' ! -path './.git/*' ! -path './extracted/*' | head -n 1)
+          echo "✅ Extracting: $ZIP_FILE"
+          unzip -tq "$ZIP_FILE"
           rm -rf extracted
           mkdir -p extracted
-          unzip -q "${ZIP_FILES}" -d extracted
+          unzip -q "$ZIP_FILE" -d extracted
 
       - name: Locate VineOS Gradle project and configure API 36 compatibility
         id: project
@@ -64,16 +66,10 @@ jobs:
 
           APP_GRADLE="$PROJECT_DIR/app/build.gradle.kts"
           if [[ -f "$APP_GRADLE" ]]; then
-            python3 - "$APP_GRADLE" <<'PY'
-          import pathlib, re, sys
-          p = pathlib.Path(sys.argv)
-          s = p.read_text()
-          s = re.sub(r'(?m)^(\s*compileSdk\s*=\s*)\d+', r'\g<1>36', s, count=1)
-          # تعطيل فحص تعارض إصدارات AAR مع compileSdk 36
-          if 'checkDebugAarMetadata' not in s:
-              s += '\n\ntasks.matching { it.name.contains("AarMetadata") }.configureEach { enabled = false }\n'
-          p.write_text(s)
-          PY
+            sed -i 's/compileSdk[[:space:]]*=[[:space:]]*[0-9]\+/compileSdk = 36/g' "$APP_GRADLE"
+            if ! grep -q "AarMetadata" "$APP_GRADLE"; then
+              printf '\ntasks.matching { it.name.contains("AarMetadata") }.configureEach { enabled = false }\n' >> "$APP_GRADLE"
+            fi
           fi
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
@@ -118,12 +114,11 @@ jobs:
         run: |
           set -euo pipefail
           PROJECT_DIR="${{ steps.project.outputs.project_dir }}"
-          mapfile -t APKS < <(find "$PROJECT_DIR/app/build/outputs/apk/debug" -maxdepth 1 -type f -name '*.apk' -size +0c -print 2>/dev/null || true)
-          if [ "${#APKS[@]}" -eq 0 ]; then
+          APK_FILE=$(find "$PROJECT_DIR/app/build/outputs/apk/debug" -maxdepth 1 -type f -name '*.apk' -size +0c -print 2>/dev/null | head -n 1 || true)
+          if [ -z "$APK_FILE" ]; then
             echo "::error::No non-empty debug APK was generated."
             exit 1
           fi
-          APK_FILE="${APKS}"
           echo "apk_path=$APK_FILE" >> "$GITHUB_OUTPUT"
           ls -lh "$APK_FILE"
 

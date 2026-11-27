@@ -1,0 +1,123 @@
+name: Build ADEL Virtual Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Download repository files
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Setup Java 17
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 3. Install unzip
+      - name: Install unzip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip
+
+      # 4. Find and extract project ZIP
+      - name: Extract project ZIP
+        run: |
+          ZIP_FILES=$(find . -maxdepth 2 -type f \
+            -iname "ADEL_Virtual_Android_GitHub_Actions_CLEAN.zip")
+
+          COUNT=$(echo "$ZIP_FILES" | grep -c . || true)
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "ERROR: Project ZIP not found!"
+            exit 1
+          fi
+
+          if [ "$COUNT" -gt 1 ]; then
+            echo "ERROR: Multiple project ZIP files found!"
+            exit 1
+          fi
+
+          ZIP_FILE="$ZIP_FILES"
+
+          echo "Found project: $ZIP_FILE"
+
+          unzip -t "$ZIP_FILE"
+
+          mkdir -p extracted
+
+          unzip -o "$ZIP_FILE" -d extracted
+
+      # 5. Setup Android SDK
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 6. Install Android SDK packages
+      - name: Install SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+
+          sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      # 7. Setup Gradle 8.9
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      # 8. Find project and build APK
+      - name: Build APK
+        id: build_apk
+        run: |
+          PROJECT_DIR=$(find extracted \
+            -name "settings.gradle*" \
+            -exec dirname {} \; | head -n 1)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Could not find settings.gradle!"
+            exit 1
+          fi
+
+          echo "Building project in: $PROJECT_DIR"
+
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+          cd "$PROJECT_DIR"
+
+          gradle --no-daemon assembleDebug
+
+      # 9. Verify APK
+      - name: Verify APK
+        run: |
+          APK="${{ steps.build_apk.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: APK was not generated!"
+            exit 1
+          fi
+
+          echo "APK generated successfully!"
+
+          ls -lh "$APK"
+
+      # 10. Upload APK artifact
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ADEL-Virtual-Android-APK
+          path: ${{ steps.build_apk.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7

@@ -2,9 +2,9 @@ name: Build VineOS Debug APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
 
 permissions:
@@ -21,21 +21,71 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Locate VineOS Project
-        id: locate
+      - name: Install ZIP tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip
+
+      - name: Find and extract VineOS project ZIP
+        id: extract
         run: |
           set -euo pipefail
-          if [ -f "ADEL_Virtual_Android_MERGED_ALPHA/vineos-engine/VineOS-0.1.0-alpha/gradlew" ]; then
-            PROJECT_DIR="ADEL_Virtual_Android_MERGED_ALPHA/vineos-engine/VineOS-0.1.0-alpha"
-          elif [ -f "vineos-engine/VineOS-0.1.0-alpha/gradlew" ]; then
-            PROJECT_DIR="vineos-engine/VineOS-0.1.0-alpha"
-          else
-            echo "::error::VineOS project directory not found! Check repository root structure."
+
+          EXPECTED_ZIP="ADEL_Virtual_Android_PHASE1_GITHUB_READY.zip"
+          mapfile -t MATCHES < <(find . -maxdepth 4 -type f -name "$EXPECTED_ZIP" -print)
+
+          if [ "${#MATCHES[@]}" -eq 0 ]; then
+            echo "::error::Project ZIP not found: $EXPECTED_ZIP"
+            echo "ZIP files currently present in repository:"
+            find . -maxdepth 4 -type f -iname '*.zip' -print || true
+            echo "Repository root:"
             ls -la
             exit 1
           fi
+
+          if [ "${#MATCHES[@]}" -gt 1 ]; then
+            echo "::error::Multiple copies of $EXPECTED_ZIP found. Keep only one."
+            printf '%s\n' "${MATCHES[@]}"
+            exit 1
+          fi
+
+          rm -rf extracted
+          mkdir -p extracted
+          unzip -q "${MATCHES[0]}" -d extracted
+          echo "Project ZIP extracted."
+
+      - name: Locate VineOS Gradle project
+        id: locate
+        run: |
+          set -euo pipefail
+
+          mapfile -t WRAPPERS < <(find extracted -type f -name gradlew -print)
+
+          if [ "${#WRAPPERS[@]}" -eq 0 ]; then
+            echo "::error::No gradlew found inside the extracted ZIP."
+            find extracted -maxdepth 6 -type f | head -n 150
+            exit 1
+          fi
+
+          PROJECT_DIR=""
+          for WRAPPER in "${WRAPPERS[@]}"; do
+            CANDIDATE="$(dirname "$WRAPPER")"
+            if [ -f "$CANDIDATE/settings.gradle" ] || [ -f "$CANDIDATE/settings.gradle.kts" ]; then
+              PROJECT_DIR="$CANDIDATE"
+              break
+            fi
+          done
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "::error::gradlew was found, but its project settings file was not found."
+            printf '%s\n' "${WRAPPERS[@]}"
+            exit 1
+          fi
+
+          PROJECT_DIR="${PROJECT_DIR#./}"
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-          echo "✅ Found VineOS project at: $PROJECT_DIR"
+          echo "Found VineOS project: $PROJECT_DIR"
+          ls -la "$PROJECT_DIR"
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -70,13 +120,15 @@ jobs:
         id: apk
         run: |
           set -euo pipefail
+
+          PROJECT_DIR="${{ steps.locate.outputs.project_dir }}"
           mapfile -t APKS < <(
-            find "${{ steps.locate.outputs.project_dir }}/app/build/outputs/apk/debug" \
-              -maxdepth 1 -type f -name '*.apk' -size +0c -print 2>/dev/null
+            find "$PROJECT_DIR" -type f -path '*/build/outputs/apk/debug/*.apk' -size +0c -print
           )
 
           if [ "${#APKS[@]}" -eq 0 ]; then
             echo "::error::Debug APK was not generated."
+            find "$PROJECT_DIR" -type d -path '*/build/outputs/*' -print || true
             exit 1
           fi
 

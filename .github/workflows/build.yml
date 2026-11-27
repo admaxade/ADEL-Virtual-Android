@@ -11,14 +11,15 @@ permissions:
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Download repository files
+      # 1. Download repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Setup Java 17
+      # 2. Install Java
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -34,32 +35,22 @@ jobs:
       # 4. Find and extract project ZIP
       - name: Extract project ZIP
         run: |
-          ZIP_FILES=$(find . -maxdepth 2 -type f \
-            -iname "ADEL_Virtual_Android_GitHub_Actions_CLEAN.zip")
+          ZIP_FILE=$(find . -type f -iname "*.zip" \
+            -not -path "./.git/*" -print -quit)
 
-          COUNT=$(echo "$ZIP_FILES" | grep -c . || true)
-
-          if [ "$COUNT" -eq 0 ]; then
+          if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: Project ZIP not found!"
             exit 1
           fi
 
-          if [ "$COUNT" -gt 1 ]; then
-            echo "ERROR: Multiple project ZIP files found!"
-            exit 1
-          fi
-
-          ZIP_FILE="$ZIP_FILES"
-
-          echo "Found project: $ZIP_FILE"
-
-          unzip -t "$ZIP_FILE"
+          echo "Found ZIP: $ZIP_FILE"
 
           mkdir -p extracted
-
           unzip -o "$ZIP_FILE" -d extracted
 
-      # 5. Setup Android SDK
+          echo "ZIP extraction completed."
+
+      # 5. Set up Android SDK
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
@@ -69,55 +60,66 @@ jobs:
           yes | sdkmanager --licenses > /dev/null
 
           sdkmanager \
+            "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      # 7. Setup Gradle 8.9
+      # 7. Set up Gradle
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      # 8. Find project and build APK
-      - name: Build APK
-        id: build_apk
+      # 8. Locate Android project
+      - name: Locate Android project
+        id: project
         run: |
           PROJECT_DIR=$(find extracted \
-            -name "settings.gradle*" \
+            -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
             -exec dirname {} \; | head -n 1)
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Could not find settings.gradle!"
+            echo "ERROR: settings.gradle not found!"
+            find extracted -maxdepth 4 -type f
             exit 1
           fi
 
-          echo "Building project in: $PROJECT_DIR"
-
+          echo "Project directory: $PROJECT_DIR"
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
-          cd "$PROJECT_DIR"
-
+      # 9. Build APK
+      - name: Build APK
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: |
           gradle --no-daemon assembleDebug
 
-      # 9. Verify APK
+      # 10. Verify APK
       - name: Verify APK
+        id: verify
         run: |
-          APK="${{ steps.build_apk.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk"
+          PROJECT_DIR="${{ steps.project.outputs.project_dir }}"
 
-          if [ ! -s "$APK" ]; then
-            echo "ERROR: APK was not generated!"
+          APK_FILE=$(find "$PROJECT_DIR" \
+            -type f \
+            -path "*/build/outputs/apk/*/*.apk" \
+            -print -quit)
+
+          if [ -z "$APK_FILE" ]; then
+            echo "ERROR: APK file was not generated!"
             exit 1
           fi
 
-          echo "APK generated successfully!"
+          echo "APK generated successfully:"
+          echo "$APK_FILE"
 
-          ls -lh "$APK"
+          echo "apk_path=$APK_FILE" >> "$GITHUB_OUTPUT"
 
-      # 10. Upload APK artifact
+      # 11. Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ADEL-Virtual-Android-APK
-          path: ${{ steps.build_apk.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.verify.outputs.apk_path }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14

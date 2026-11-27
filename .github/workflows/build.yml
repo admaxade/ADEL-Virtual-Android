@@ -26,13 +26,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # 3. تثبيت أداة فك الضغط
+      # 3. تثبيت unzip
       - name: Install unzip
         run: |
           sudo apt-get update
           sudo apt-get install -y unzip
 
-      # 4. البحث عن ملف ZIP في جميع المجلدات وفك ضغطه
+      # 4. البحث عن ملف ZIP وفك ضغطه
       - name: Extract Project ZIP
         shell: bash
         run: |
@@ -67,7 +67,6 @@ jobs:
 
           if [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
             echo "ERROR: VineOS settings.gradle.kts not found!"
-            echo "Available Gradle settings:"
             find extracted -name settings.gradle.kts
             exit 1
           fi
@@ -86,22 +85,40 @@ jobs:
 
           echo "VineOS project verified."
 
-      # 6. إعداد Android SDK وNDK وCMake
+      # 6. إعداد Android SDK
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          packages: |
-            platform-tools
-            platforms;android-37
-            build-tools;35.0.0
-            ndk;26.1.10909125
-            cmake;3.22.1
 
-      # 7. إعداد Gradle
+      # 7. تثبيت حزم Android SDK
+      - name: Install Android SDK Packages
+        shell: bash
+        run: |
+          set -e
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -f "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found!"
+            find "$ANDROID_HOME/cmdline-tools" -name sdkmanager
+            exit 1
+          fi
+
+          yes | "$SDKMANAGER" --licenses || true
+
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-37" \
+            "build-tools;35.0.0" \
+            "ndk;26.1.10909125" \
+            "cmake;3.22.1"
+
+          echo "Android SDK packages installed successfully."
+
+      # 8. إعداد Gradle
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # 8. التحقق من بيئة البناء
+      # 9. فحص بيئة البناء
       - name: Verify Build Environment
         shell: bash
         run: |
@@ -119,23 +136,22 @@ jobs:
           cd "$PROJECT_DIR"
 
           echo "Gradle version:"
+          chmod +x gradlew
           ./gradlew --version
 
-      # 9. بناء APK
+      # 10. بناء APK
       - name: Build ADEL Virtual Android APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
-          chmod +x gradlew
-
           ./gradlew \
             --no-daemon \
             --stacktrace \
             assembleDebug
 
-      # 10. التحقق من إنشاء APK
+      # 11. التحقق من إنشاء APK
       - name: Verify APK
         shell: bash
         run: |
@@ -162,7 +178,7 @@ jobs:
           echo "APK generated successfully:"
           ls -lh "$APK_FILE"
 
-      # 11. رفع APK إلى GitHub Actions
+      # 12. رفع APK إلى GitHub Actions
       - name: Upload ADEL APK
         uses: actions/upload-artifact@v4
         with:

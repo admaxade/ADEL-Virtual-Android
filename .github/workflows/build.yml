@@ -100,6 +100,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: ''          # لا تثبت شيء هنا لتجنب الفشل
 
       - name: Normalize & Detect compileSdk
         id: sdk
@@ -114,7 +116,7 @@ jobs:
             exit 1
           fi
 
-          # Safety: force 37 → 36 if somehow still present
+          # حماية إضافية: تحويل 37 إلى 36 إذا وُجد
           sed -i 's/compileSdk[[:space:]]*=[[:space:]]*37/compileSdk = 36/g' "$GRADLE_FILE"
           sed -i 's/targetSdk[[:space:]]*=[[:space:]]*37/targetSdk = 36/g' "$GRADLE_FILE"
 
@@ -143,7 +145,7 @@ jobs:
 
           COMPILE_SDK="${{ steps.sdk.outputs.compile_sdk }}"
 
-          sdkmanager \
+          sdkmanager --install \
             "platform-tools" \
             "platforms;android-${COMPILE_SDK}" \
             "build-tools;36.0.0" \
